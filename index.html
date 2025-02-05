@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI Real-time Audio Demo</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .red-text {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OpenAI Realtime Audio Demo</h1>
+
+        <div class="controls" style="text-align: center; margin-bottom: 2rem;">
+            <button id="startButton">Start</button>
+            <button id="stopButton" disabled>Stop</button>
+        </div>
+
+        <div class="transcript-container">
+            <div id="transcript" class="transcript"></div>
+        </div>
+
+        <div id="fullResponse" class="response-container"></div>
+        <div id="status" class="status">Ready to start</div>
+        <div id="error" class="error"></div>
+    </div>
+
+    <script>
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const transcriptDiv = document.getElementById('transcript');
+        const fullResponseDiv = document.getElementById('fullResponse');
+        const statusDiv = document.getElementById('status');
+        const errorDiv = document.getElementById('error');
+
+        let peerConnection = null;
+        let audioStream = null;
+        let dataChannel = null;
+
+        // Message handling functions
+        function handleTranscript(message) {
+            if (message.response?.output?.[0]?.content?.[0]?.transcript) {
+                let transcript = message.response.output[0].content[0].transcript;
+
+                // Example modifications to the transcript
+                transcript = transcript.replace(/\buh\b/gi, ""); // Remove "uh"
+                transcript = transcript.replace(/\byou know\b/gi, ""); // Remove "you know"
+                transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1); // Capitalize the first letter
+                transcript += "."; // Add a period at the end
+
+                // Append the modified transcript to the transcript container
+                transcriptDiv.textContent += transcript + " ";
+            }
+        }
+
+        function handleInputAudioTranscriptionCompleted(message) {
+            if (message.transcript) {
+                // Create a span element to style the input transcription
+                const inputTranscriptionElement = document.createElement("span");
+                inputTranscriptionElement.className = "red-text"; // Set the class for red color
+                inputTranscriptionElement.textContent = message.transcript;
+
+                // Add the styled input transcription to the transcript container
+                transcriptDiv.appendChild(inputTranscriptionElement);
+                transcriptDiv.appendChild(document.createElement("br")); // Add a line break for better readability
+            }
+        }
+
+        async function handleWeatherFunction(output) {
+            try {
+                const args = JSON.parse(output.arguments);
+                const location = args.location;
+
+                const response = await fetch(`http://localhost:8888/weather/${encodeURIComponent(location)}`);
+                const data = await response.json();
+
+                // Send function output
+                sendFunctionOutput(output.call_id, {
+                    temperature: data.temperature,
+                    unit: data.unit,
+                    location: location
+                });
+
+                // Request new response
+                sendResponseCreate();
+            } catch (error) {
+                showError('Error handling weather function: ' + error.message);
+            }
+        }
+
+        async function handleObjectDetection(output) {
+            try {
+                const args = JSON.parse(output.arguments);
+
+                const response = await fetch('http://localhost:8888/detect');
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                    objects: data.objects,
+                });
+
+                sendResponseCreate();
+            } catch (error) {
+                showError('Error handling object detection: ' + error.message);
+            }
+        }
+
+        async function handleTeachingMode(output) {
+            try {
+                const args = JSON.parse(output.arguments);
+                const mode = args.mode; // 'start' or 'stop'
+
+                const response = await fetch('http://localhost:8888/teaching-mode', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ mode: mode })
+                });
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                    status: data.status,
+                    mode: mode
+                });
+
+                sendResponseCreate();
+            } catch (error) {
+                showError('Error handling teaching mode: ' + error.message);
+            }
+        }
+
+        function handleFunctionCall(output) {
+            if (output?.type === "function_call" && output?.call_id) {
+                console.log('Function call found:', output);
+                switch(output.name) {
+                    case "get_weather":
+                        handleWeatherFunction(output);
+                        break;
+                    case "detect_objects":
+                        handleObjectDetection(output);
+                        break;
+                    case "teaching_mode":
+                        handleTeachingMode(output);
+                        break;
+                    default:
+                        console.log('Unknown function:', output.name);
+                }
+            }
+        }
+
+        function handleMessage(event) {
+            try {
+                const message = JSON.parse(event.data);
+                console.log('Full response:', message); // Log full response to console
+
+                // Display the full response in the fullResponse container
+                fullResponseDiv.textContent = JSON.stringify(message, null, 2);
+
+                switch (message.type) {
+                    case "response.done":
+                        handleTranscript(message);
+                        const output = message.response?.output?.[0];
+                        if (output) handleFunctionCall(output);
+                        break;
+                    case "conversation.item.input_audio_transcription.completed":
+                        handleInputAudioTranscriptionCompleted(message);
+                        break;
+                    default:
+                        console.log('Unhandled message type:', message.type);
+                }
+            } catch (error) {
+                showError('Error processing message: ' + error.message);
+            }
+        }
+
+        // WebRTC setup functions
+        async function setupAudio() {
+            const audioEl = document.createElement("audio");
+            audioEl.autoplay = true;
+            peerConnection.ontrack = e => audioEl.srcObject = e.streams[0];
+
+            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            peerConnection.addTrack(audioStream.getTracks()[0]);
+        }
+
+        function setupDataChannel() {
+            dataChannel = peerConnection.createDataChannel("oai-events");
+            dataChannel.onopen = onDataChannelOpen;
+            dataChannel.addEventListener("message", handleMessage);
+        }
+
+        // Message sending functions
+        function sendSessionUpdate() {
+            const sessionUpdateEvent = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "instructions": "You are a helpful assistant.",
+                    "voice": "sage",
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",
+                    "input_audio_transcription": {
+                        "model": "whisper-1"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        "create_response": true
+                    },
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "get_weather",
+                            "description": "Get the current weather for a location",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "location": { "type": "string" }
+                                },
+                                "required": ["location"]
+                            }
+                        },
+                        {
+                            "type": "function",
+                            "name": "detect_objects",
+                            "description": "Detect objects using computer vision",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            }
+                        },
+                    ],
+                    "tool_choice": "auto",
+                    "temperature": 0.8,
+                    "max_response_output_tokens": "inf"
+                }
+            };
+            sendMessage(sessionUpdateEvent);
+        }
+
+        function sendFunctionOutput(callId, data) {
+            const responseMessage = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": callId,
+                    "output": JSON.stringify(data)
+                }
+            };
+            sendMessage(responseMessage);
+        }
+
+        function sendResponseCreate() {
+            sendMessage({ "type": "response.create" });
+        }
+
+        function sendMessage(message) {
+            if (dataChannel?.readyState === "open") {
+                dataChannel.send(JSON.stringify(message));
+                console.log('Sent message:', message);
+            }
+        }
+
+        function onDataChannelOpen() {
+            sendSessionUpdate();
+        }
+
+        // Main control functions
+        async function init() {
+            startButton.disabled = true;
+
+            try {
+                updateStatus('Initializing...');
+
+                const tokenResponse = await fetch("http://localhost:8888/session");
+                const data = await tokenResponse.json();
+                const EPHEMERAL_KEY = data.client_secret.value;
+
+                peerConnection = new RTCPeerConnection();
+                await setupAudio();
+                setupDataChannel();
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                const baseUrl = "https://api.openai.com/v1/realtime";
+                const model = "gpt-4o-realtime-preview-2024-12-17";
+                const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
+                    method: "POST",
+                    body: offer.sdp,
+                    headers: {
+                        Authorization: `Bearer ${EPHEMERAL_KEY}`,
+                        "Content-Type": "application/sdp"
+                    },
+                });
+
+                const answer = {
+                    type: "answer",
+                    sdp: await sdpResponse.text(),
+                };
+                await peerConnection.setRemoteDescription(answer);
+
+                updateStatus('Connected');
+                stopButton.disabled = false;
+                hideError();
+
+            } catch (error) {
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                showError('Error: ' + error.message);
+                console.error('Initialization error:', error);
+                updateStatus('Failed to connect');
+            }
+        }
+
+        function stopRecording() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
+            }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
+            }
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            updateStatus('Ready to start');
+        }
+
+        // UI helper functions
+        function updateStatus(message) {
+            statusDiv.textContent = message;
+        }
+
+        function showError(message) {
+            errorDiv.style.display = 'block';
+            errorDiv.textContent = message;
+        }
+
+        function hideError() {
+            errorDiv.style.display = 'none';
+        }
+
+        // Event listeners
+        startButton.addEventListener('click', init);
+        stopButton.addEventListener('click', stopRecording);
+        document.addEventListener('DOMContentLoaded', () => updateStatus('Ready to start'));
+    </script>
+</body>
+</html>
