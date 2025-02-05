@@ -30,18 +30,72 @@
     </div>
 
     <script>
+        // -------------------------------------------------------------------------------------------------------------//
+        // Frontend Element calls
         const startButton = document.getElementById('startButton');
         const stopButton = document.getElementById('stopButton');
         const transcriptDiv = document.getElementById('transcript');
         const fullResponseDiv = document.getElementById('fullResponse');
         const statusDiv = document.getElementById('status');
         const errorDiv = document.getElementById('error');
+        const systemPrompt = `You are Alice, an intelligent and intuitive collaborative robot (cobot) designed to sit at the heart of human-robot collaboration.
+
+        Your primary purpose is to learn and execute manipulation-based tasks by observing and interacting with humans.
+
+        You are housed in a 6-DoF robotic arm with a 2-finger gripper, a camera, and a depth sensor.
+
+        You are currently lacking your advanced end-effector named the "AI Hand" which is currently under development.
+
+        Users will interact with you through voice commands to look for objects, go into learning mode, and execution mode to pick up objects from where they taught you to pick them up.
+
+        You will be able to detect objects in your environment using a YOLO object detection model and track human hand keypoints using a hand keypoint model.
+
+        You will be able to interact with humans by observing their hand gestures and object placements to learn how to pick up objects.
+
+        You will be able to move your robotic arm to pick up objects and place them in a desired location.
+
+        Here are some examples on how humans will interact with you:
+
+        Natural Commands: Users can say things like:
+            "Watch me pick up this object" → You enter Learning Mode and adjust your detection system to track the demonstrated object.
+            "Pick it up" → You execute the learned task, transitioning to Execution Mode if needed.
+            "Look for a [specific object]" → You update your detection system to track the specified object(s) and enter learning mode if not already in it.
+
+        NOTE: You should be able to handle multiple objects at once, and also you can be asked to pick up objects that you have not seen before.
+        NOTE: Another note, you can change what objects to look for while being in learning mode.
+
+        Flexible Workflow: Users can transition fluidly between Learning Mode and Execution Mode, giving commands naturally without explicitly specifying the mode.`;
 
         let peerConnection = null;
         let audioStream = null;
         let dataChannel = null;
-
-        // Message handling functions
+        // -------------------------------------------------------------------------------------------------------------//
+        // Functions
+        // -------------------------------------------------------------------------------------------------------------//
+        // Function Call : Handle Function Calls All the functions need to be in this call
+        function handleFunctionCall(output) {
+            if (output?.type === "function_call" && output?.call_id) {
+                console.log('Function call found:', output);
+                switch(output.name) {
+                    case "get_weather":
+                        handleWeatherFunction(output);
+                        break;
+                    case "detect_objects":
+                        handleObjectDetection(output);
+                        break;
+                    case "teaching_mode":
+                        handleTeachingMode(output);
+                        break;
+                    case "record_video":
+                        handelRecordVideo(output);
+                        break;
+                    default:
+                        console.log('Unknown function call:', output.name);
+                }
+            }
+        }
+        // -------------------------------------------------------------------------------------------------------------//
+        // OPENAI Functions : Realtime Voice Client
         function handleTranscript(message) {
             if (message.response?.output?.[0]?.content?.[0]?.transcript) {
                 let transcript = message.response.output[0].content[0].transcript;
@@ -69,7 +123,8 @@
                 transcriptDiv.appendChild(document.createElement("br")); // Add a line break for better readability
             }
         }
-
+        // -------------------------------------------------------------------------------------------------------------//
+        // Weather Call : Test Function
         async function handleWeatherFunction(output) {
             try {
                 const args = JSON.parse(output.arguments);
@@ -92,10 +147,13 @@
             }
         }
 
+        // -------------------------------------------------------------------------------------------------------------//
+        // Object Detection : Gemini Object Detection Function
         async function handleObjectDetection(output) {
             try {
                 const args = JSON.parse(output.arguments);
-
+                
+                // TODO: Why are we using localhost , need to update to IP address
                 const response = await fetch('http://localhost:8888/detect');
                 const data = await response.json();
 
@@ -109,6 +167,8 @@
             }
         }
 
+        // -------------------------------------------------------------------------------------------------------------//
+        // Teaching Mode : Start/Stop Teaching Mode Dummy
         async function handleTeachingMode(output) {
             try {
                 const args = JSON.parse(output.arguments);
@@ -134,25 +194,30 @@
             }
         }
 
-        function handleFunctionCall(output) {
-            if (output?.type === "function_call" && output?.call_id) {
-                console.log('Function call found:', output);
-                switch(output.name) {
-                    case "get_weather":
-                        handleWeatherFunction(output);
-                        break;
-                    case "detect_objects":
-                        handleObjectDetection(output);
-                        break;
-                    case "teaching_mode":
-                        handleTeachingMode(output);
-                        break;
-                    default:
-                        console.log('Unknown function:', output.name);
-                }
+        // -------------------------------------------------------------------------------------------------------------//
+        // Record Video : Recoed Video Function
+        async function handelRecordVideo(output) {
+            try {
+                const args = JSON.parse(output.arguments);
+
+                const response = await fetch('http://localhost:8888/detect');
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                    objects: data.objects,
+                    action: data.action,
+                    num_samples: data.num_samples
+                });
+
+                sendResponseCreate();
+            } 
+            catch (error) 
+            {
+                showError('Error handling recording videos: ' + error.message);
             }
         }
-
+        
+        // -------------------------------------------------------------------------------------------------------------//
         function handleMessage(event) {
             try {
                 const message = JSON.parse(event.data);
@@ -178,7 +243,9 @@
             }
         }
 
+        // -------------------------------------------------------------------------------------------------------------//
         // WebRTC setup functions
+        // -------------------------------------------------------------------------------------------------------------//
         async function setupAudio() {
             const audioEl = document.createElement("audio");
             audioEl.autoplay = true;
@@ -194,13 +261,14 @@
             dataChannel.addEventListener("message", handleMessage);
         }
 
-        // Message sending functions
+        // -------------------------------------------------------------------------------------------------------------//
+        // Function Descriptions : These Function descriptions are used by OpenAI to fo function calling based on task name and description. Be as detailed as possible
         function sendSessionUpdate() {
             const sessionUpdateEvent = {
                 "type": "session.update",
                 "session": {
                     "modalities": ["text", "audio"],
-                    "instructions": "You are a helpful assistant.",
+                    "instructions": systemPrompt,
                     "voice": "sage",
                     "input_audio_format": "pcm16",
                     "output_audio_format": "pcm16",
@@ -214,7 +282,11 @@
                         "silence_duration_ms": 500,
                         "create_response": true
                     },
+                    // -------------------------------------------------------------------------------------------------------------//
+                    // Tools
+                    // -------------------------------------------------------------------------------------------------------------//
                     "tools": [
+                        // Function: Weather
                         {
                             "type": "function",
                             "name": "get_weather",
@@ -227,16 +299,45 @@
                                 "required": ["location"]
                             }
                         },
+                        // Function: Detect Objects
                         {
                             "type": "function",
                             "name": "detect_objects",
-                            "description": "Detect objects using computer vision",
+                            "description": "Detect objects using Gemini Object Detection API and returns the object names.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {},
                                 "required": []
                             }
                         },
+                        // Function: Teaching Mode
+                        {
+                            "type": "function",
+                            "name": "teaching_mode",
+                            "description": "Start or stop teaching mode",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "mode": { "type": "string", "enum": ["start", "stop"] }
+                                },
+                                "required": ["mode"]
+                            }
+                        },
+                        // Function: Record Video
+                        {
+                            "type": "function",
+                            "name": "record_video",
+                            "description": "This function starts video recording for the specified number of recordings and stores them in the corresponding directory. It takes input of num_samples, action being performed, and objects used in the action. After the recording is complete, it returns a response indicating the status of the video recording.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "num_samples": { "type": "integer" },
+                                    "action": { "type": "string" },
+                                    "objects": { "type": "array", "items": { "type": "string" } }
+                                },
+                                "required": ["num_samples", "action", "objects"]
+                            }
+                        }
                     ],
                     "tool_choice": "auto",
                     "temperature": 0.8,
@@ -273,7 +374,9 @@
             sendSessionUpdate();
         }
 
+        // -------------------------------------------------------------------------------------------------------------//
         // Main control functions
+        // -------------------------------------------------------------------------------------------------------------//
         async function init() {
             startButton.disabled = true;
 
@@ -339,7 +442,9 @@
             updateStatus('Ready to start');
         }
 
+        // -------------------------------------------------------------------------------------------------------------//
         // UI helper functions
+        // -------------------------------------------------------------------------------------------------------------//
         function updateStatus(message) {
             statusDiv.textContent = message;
         }
@@ -353,7 +458,9 @@
             errorDiv.style.display = 'none';
         }
 
+        // -------------------------------------------------------------------------------------------------------------//
         // Event listeners
+        // -------------------------------------------------------------------------------------------------------------//
         startButton.addEventListener('click', init);
         stopButton.addEventListener('click', stopRecording);
         document.addEventListener('DOMContentLoaded', () => updateStatus('Ready to start'));
