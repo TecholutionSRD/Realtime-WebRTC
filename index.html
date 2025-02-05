@@ -199,14 +199,15 @@
         async function handelRecordVideo(output) {
             try {
                 const args = JSON.parse(output.arguments);
+                const { objects, action, num_samples } = args;
 
-                const response = await fetch('http://localhost:8888/detect');
+                const response = await fetch(`http://localhost:8888/record_video?num_recordings=${num_samples}&action_name=${action}&objects=${JSON.stringify(objects)}`, {
+                    method: 'GET'
+                });
                 const data = await response.json();
 
                 sendFunctionOutput(output.call_id, {
-                    objects: data.objects,
-                    action: data.action,
-                    num_samples: data.num_samples
+                    comment: data.comment
                 });
 
                 sendResponseCreate();
@@ -246,13 +247,14 @@
         // -------------------------------------------------------------------------------------------------------------//
         // WebRTC setup functions
         // -------------------------------------------------------------------------------------------------------------//
+        // WebRTC setup functions
         async function setupAudio() {
             const audioEl = document.createElement("audio");
             audioEl.autoplay = true;
             peerConnection.ontrack = e => audioEl.srcObject = e.streams[0];
 
-            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            peerConnection.addTrack(audioStream.getTracks()[0]);
+            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); // Ensuring both audio and video are captured
+            audioStream.getTracks().forEach(track => peerConnection.addTrack(track, audioStream)); // Add both audio and video tracks
         }
 
         function setupDataChannel() {
@@ -327,13 +329,13 @@
                         {
                             "type": "function",
                             "name": "record_video",
-                            "description": "This function starts video recording for the specified number of recordings and stores them in the corresponding directory. It takes input of num_samples, action being performed, and objects used in the action. After the recording is complete, it returns a response indicating the status of the video recording.",
+                            "description": "Records videos of specified actions with objects. Makes a GET request to record video endpoint with parameters for number of recordings, action name, and objects involved. Returns a comment about the recording status.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
-                                    "num_samples": { "type": "integer" },
-                                    "action": { "type": "string" },
-                                    "objects": { "type": "array", "items": { "type": "string" } }
+                                    "num_samples": { "type": "integer", "description": "Number of video recordings to make" },
+                                    "action": { "type": "string", "description": "Name of the action being performed" },
+                                    "objects": { "type": "array", "items": { "type": "string" }, "description": "Array of object names involved in the action" }
                                 },
                                 "required": ["num_samples", "action", "objects"]
                             }
@@ -379,20 +381,20 @@
         // -------------------------------------------------------------------------------------------------------------//
         async function init() {
             startButton.disabled = true;
-
             try {
                 updateStatus('Initializing...');
-
                 const tokenResponse = await fetch("http://localhost:8888/session");
                 const data = await tokenResponse.json();
                 const EPHEMERAL_KEY = data.client_secret.value;
 
                 peerConnection = new RTCPeerConnection();
-                await setupAudio();
+                await setupAudio(); // Ensures audio and video tracks are added to peerConnection
                 setupDataChannel();
 
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
+
+                console.log("SDP Offer:", peerConnection.localDescription.sdp); // Log SDP for debugging
 
                 const baseUrl = "https://api.openai.com/v1/realtime";
                 const model = "gpt-4o-realtime-preview-2024-12-17";
@@ -414,7 +416,6 @@
                 updateStatus('Connected');
                 stopButton.disabled = false;
                 hideError();
-
             } catch (error) {
                 startButton.disabled = false;
                 stopButton.disabled = true;
@@ -444,7 +445,6 @@
 
         // -------------------------------------------------------------------------------------------------------------//
         // UI helper functions
-        // -------------------------------------------------------------------------------------------------------------//
         function updateStatus(message) {
             statusDiv.textContent = message;
         }
@@ -460,7 +460,6 @@
 
         // -------------------------------------------------------------------------------------------------------------//
         // Event listeners
-        // -------------------------------------------------------------------------------------------------------------//
         startButton.addEventListener('click', init);
         stopButton.addEventListener('click', stopRecording);
         document.addEventListener('DOMContentLoaded', () => updateStatus('Ready to start'));

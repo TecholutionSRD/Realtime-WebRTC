@@ -18,7 +18,7 @@ from RAIT.functions.gemini_inference import Gemini_Inference
 from RAIT.functions.video_recorder import VideoRecorder
 from RAIT.functions.utils_main import *
 #----------------- Load Configurations -----------------#
-config = load_config("/home/shreyas/Desktop/Stream/RAIT/config/config.yaml")
+config = load_config("../config/config.yaml")
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -134,6 +134,7 @@ async def record_videos(num_recordings: int = 1, action_name: str = "pouring", o
         VideoRecordingResponse: A response with a message indicating the completion of the video recording.
     """
     receiver = CameraReceiver(config)
+    await receiver.connect()
     recorder = VideoRecorder(receiver, config, num_recordings, action_name, objects)
     await recorder.record_video()
     return VideoRecordingResponse(comment="Video recording complete.")
