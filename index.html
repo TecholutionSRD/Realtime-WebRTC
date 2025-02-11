@@ -101,11 +101,15 @@
         
         const systemPrompt = `${existingSystemPrompt}\n${systemPromptAddition}`;
         
+        let onboardingMode = false;
+        let simulationMode = false;
         let peerConnection = null;
         let audioStream = null;
         let dataChannel = null;
-        let onboardingMode = false;
         let currentTaskId = null; 
+        let currentActionName = null;
+        let currentDescription = null;
+        let currentObjects = null; 
         // -------------------------------------------------------------------------------------------------------------//
         // Functions
         // -------------------------------------------------------------------------------------------------------------//
@@ -120,9 +124,6 @@
                     case "detect_objects":
                         handleObjectDetection(output);
                         break;
-                    case "teaching_mode":
-                        handleTeachingMode(output);
-                        break;
                     case "record_video":
                         handelRecordVideo(output);
                         break;
@@ -134,6 +135,9 @@
                         break;
                     case "onboard_action":
                         handleOnboardInformtation(output);
+                        break;
+                    case "simulate":
+                        handleSimulationMode(output);
                         break;
                     default:
                         console.log('Unknown function call:', output.name);
@@ -241,6 +245,10 @@
         // -------------------------------------------------------------------------------------------------------------//
         // Record Video : Recoed Video Function
         async function handelRecordVideo(output) {
+            if (!onboardingMode) {
+                console.log("Not in onboarding mode.");
+                return;
+            }
             try {
                 const args = JSON.parse(output.arguments);
                 const { objects, action, num_samples } = args;
@@ -299,66 +307,64 @@
                 showError('Error handling specific knowledge check: ' + error.message);
             }
         }
-    
         // -------------------------------------------------------------------------------------------------------------//
         // Onboard Action : Onboard Action Function
         async function handleOnboardInformtation(output) {
             try {
-            const args = JSON.parse(output.arguments);
-            const { action_name, description, objects, confirm } = args;
+                const args = JSON.parse(output.arguments);
+                const { action_name, description, objects, confirm } = args;
 
-            // Store the values in const variables
-            const current_action_name = action_name;
-            const current_description = description;
-            const current_objects = objects;
 
-            const onboardResponse = await fetch(`${base_url}/onboarding_information`, {
-            method: 'POST',
-            headers: {
-            'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-            action_name,
-            description,
-            objects,
-            confirm
-            })
-            });
-            const responseData = await onboardResponse.json();
+                currentActionName = action_name;
+                currentDescription = description;
+                currentObjects = objects;
 
-            if (!confirm) {
-            // First call - show confirmation message
-            sendFunctionOutput(output.call_id, {
-            status: "awaiting_confirmation",
-            details: responseData.details,
-            message: `Please confirm the following information:\nAction: ${action_name}\nDescription: ${description}\nObjects: ${objects.join(", ")}\n\nSay 'yes' to confirm or 'no' to start over.`
-            });
-            } else {
-            // Confirmation call - return result and enable onboarding mode
-            if (responseData.status === "success") {
-            onboardingMode = true;
-            currentTaskId = responseData.task_id;
-            updateStatus(`Onboarding Mode Active - Task ID: ${currentTaskId}`);
-            handleOnboardingMode();
-            }
-            
-            sendFunctionOutput(output.call_id, {
-            status: responseData.status,
-            message: responseData.message,
-            task_id: responseData.task_id,
-            onboarding_mode: onboardingMode
-            });
-            }
+                const onboardResponse = await fetch(`${base_url}/onboarding_information`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action_name,
+                        description,
+                        objects,
+                        confirm
+                    })
+                });
 
-            sendResponseCreate();
+                const responseData = await onboardResponse.json();
+
+                if (!confirm) {
+                    // First call - show confirmation message
+                    sendFunctionOutput(output.call_id, {
+                        status: "awaiting_confirmation",
+                        details: responseData.details,
+                        message: `Please confirm the following information:\nAction: ${currentActionName}\nDescription: ${currentDescription}\nObjects: ${currentObjects.join(", ")}\n\nSay 'yes' to confirm or 'no' to start over.`
+                    });
+                } else {
+                    // Confirmation call - return result and enable onboarding mode
+                    if (responseData.status === "success") {
+                        onboardingMode = true;
+                        currentTaskId = responseData.task_id;
+                        updateStatus(`Onboarding Mode Active - Task ID: ${currentTaskId}`);
+                    }
+
+                    sendFunctionOutput(output.call_id, {
+                        status: responseData.status,
+                        message: responseData.message,
+                        task_id: responseData.task_id,
+                        onboarding_mode: onboardingMode
+                    });
+                }
+
+                sendResponseCreate();
             } catch (error) {
-            showError('Error handling action onboarding: ' + error.message);
-            onboardingMode = false;
-            currentTaskId = null;
+                showError('Error handling action onboarding: ' + error.message);
+                onboardingMode = false;
+                currentTaskId = null;
             }
         }
-        // -------------------------------------------------------------------------------------------------------------//
-        // Function : To Enable Onboarding Mode
+
         function updateStatus(message) {
             const statusDiv = document.getElementById('status');
             if (onboardingMode) {
@@ -368,41 +374,48 @@
             }
             statusDiv.textContent = message;
         }
-
+        
         // -------------------------------------------------------------------------------------------------------------//
-        // Function : Onboarding Mode
-        async function handleOnboardingMode() {
-            if (!onboardingMode) {
-            console.log("Not in onboarding mode.");
-            return;
-            }
-
-            if (!currentTaskId) {
-            console.warn("No task ID available during onboarding.");
-            return;
-            }
-
+        // simulation Mode : Handle simulation Mode Function
+        async function handleSimulationMode(output) {
             try {
-            const onboardingInfoResponse = await fetch(`${base_url}/onboarding_information?task_id=${currentTaskId}`);
-            const onboardingInfo = await onboardingInfoResponse.json();
+                const args = JSON.parse(output.arguments);
+                const { confirm } = args;
+                
+                if (!confirm) {
+                    sendFunctionOutput(output.call_id, {
+                        status: "awaiting_confirmation",
+                        message: "Would you like to enter simulation mode to see what I can see? Say 'yes' to confirm or 'no' to cancel."
+                    });
+                } else {
+                    simulationMode = true;
+                    
+                    // TODO : Update simulation URL
+                    // const simulationUrl = `${base_url}/simulation_feed`;
+                    const simulationUrl = "https://google.com";
+                    const newWindow = window.open(simulationUrl, '_blank');
+                    if (newWindow === null || typeof(newWindow) === 'undefined') {
+                        sendFunctionOutput(output.call_id, {
+                            status: "error",
+                            message: "Popup was blocked by the browser. Please allow popups for this site.",
+                            simulation_mode: SimulationMode
+                        });
+                        return;
+                    }
+                    
+                    sendFunctionOutput(output.call_id, {
+                        status: "success",
+                        message: "simulation mode activated. Opening video feed in new tab.",
+                        simulation_mode: SimulationMode
+                    });
+                    
+                    updateStatus("simulation Mode Active");
+                }
 
-            if (!onboardingInfo || !onboardingInfo.action_name || !onboardingInfo.objects) {
-                console.error("Missing onboarding information.");
-                return;
-            }
-
-            const recordVideoArgs = {
-                arguments: JSON.stringify({
-                    objects: onboardingInfo.objects,
-                    action: onboardingInfo.action_name,
-                    num_samples: 1
-                })
-            };
-
-            await handelRecordVideo({ arguments: JSON.stringify(recordVideoArgs) });
-
+                sendResponseCreate();
             } catch (error) {
-            showError('Error during onboarding mode: ' + error.message);
+                showError('Error handling simulation mode: ' + error.message);
+                SimulationMode = false;
             }
         }
 
@@ -556,7 +569,7 @@
                         {
                             "type": "function",
                             "name": "onboard_action",
-                            "description": "Handles the onboarding process for new actions. First collects action details, then asks for confirmation, and finally creates a task if confirmed.",
+                            "description": "Handles the onboarding process for new actions. First collects action details, then asks for confirmation, and finally creates a task if confirmed. And waits for user to say 'start recording'.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -580,8 +593,23 @@
                                 },
                                 "required": ["action_name", "description", "objects", "confirm"]
                             }
+                        },
+                        // Functon : SimulationMode
+                        {
+                            "type": "function",
+                            "name": "simulate",
+                            "description": "Enables simulation mode to show the robot's simulation in a new browser tab. Requires user confirmation.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "confirm": {
+                                        "type": "boolean",
+                                        "description": "Whether this is a confirmation request (true) or initial request (false)"
+                                    }
+                                },
+                                "required": ["confirm"]
+                            }
                         }
-                        
                     ],
                     "tool_choice": "auto",
                     "temperature": 0.8,
