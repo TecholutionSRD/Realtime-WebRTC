@@ -32,13 +32,14 @@
     <script>
         // -------------------------------------------------------------------------------------------------------------//
         // Frontend Element calls
+        const base_url = "http://localhost:8888"
         const startButton = document.getElementById('startButton');
         const stopButton = document.getElementById('stopButton');
         const transcriptDiv = document.getElementById('transcript');
         const fullResponseDiv = document.getElementById('fullResponse');
         const statusDiv = document.getElementById('status');
         const errorDiv = document.getElementById('error');
-        const systemPrompt = `You are Alice, an intelligent and intuitive collaborative robot (cobot) designed to sit at the heart of human-robot collaboration.
+        const existingSystemPrompt = `You are Alice, an intelligent and intuitive collaborative robot (cobot) designed to sit at the heart of human-robot collaboration.
 
         Your primary purpose is to learn and execute manipulation-based tasks by observing and interacting with humans.
 
@@ -65,10 +66,46 @@
         NOTE: Another note, you can change what objects to look for while being in learning mode.
 
         Flexible Workflow: Users can transition fluidly between Learning Mode and Execution Mode, giving commands naturally without explicitly specifying the mode.`;
+    
+        const systemPromptAddition = `
+        When a user wants to onboard a new action:
+        1. Ask for action name if not provided
+        2. Ask for description if not provided
+        3. Ask for objects involved if not provided
+        4. Once all information is collected, call onboard_action with confirm=false
+        5. Read back the information and ask for confirmation
+        6. If user confirms (says 'yes'):
+        - Call onboard_action with confirm=true
+        - System will enter onboarding mode
+        - Inform user that onboarding mode is active and they can start demonstrating the action
+        7. If user denies (says 'no'), start the process over
 
+        Example conversation:
+        User: "I want to onboard a new action"
+        Assistant: "What's the name of the action you want to onboard?"
+        User: "Pouring"
+        Assistant: "Please provide a description of the pouring action."
+        User: "Pouring soda"
+        Assistant: "What objects are involved in this action?"
+        User: "Red soda can and white mug"
+        Assistant: [Calls onboard_action with confirm=false]
+        "Please confirm the following information:
+        Action: Pouring
+        Description: Pouring soda
+        Objects: Red soda can, white mug
+
+        Is this information correct? Say 'yes' to confirm or 'no' to start over."
+        User: "Yes"
+        Assistant: [Calls onboard_action with confirm=true]
+        "Great! I've created a task with ID: [task_id]. Onboarding mode is now active. You can start demonstrating the action."`;
+        
+        const systemPrompt = `${existingSystemPrompt}\n${systemPromptAddition}`;
+        
         let peerConnection = null;
         let audioStream = null;
         let dataChannel = null;
+        let onboardingMode = false;
+        let currentTaskId = null; 
         // -------------------------------------------------------------------------------------------------------------//
         // Functions
         // -------------------------------------------------------------------------------------------------------------//
@@ -88,6 +125,15 @@
                         break;
                     case "record_video":
                         handelRecordVideo(output);
+                        break;
+                    case "check_knowledge":
+                        handleCheckKnowledge(output);
+                        break;
+                    case "specific_knowledge_check":
+                        handleSpecificKnowledgeCheck(output);
+                        break;
+                    case "onboard_action":
+                        handleOnboardInformtation(output);
                         break;
                     default:
                         console.log('Unknown function call:', output.name);
@@ -123,6 +169,7 @@
                 transcriptDiv.appendChild(document.createElement("br")); // Add a line break for better readability
             }
         }
+        
         // -------------------------------------------------------------------------------------------------------------//
         // Weather Call : Test Function
         async function handleWeatherFunction(output) {
@@ -130,7 +177,7 @@
                 const args = JSON.parse(output.arguments);
                 const location = args.location;
 
-                const response = await fetch(`http://localhost:8888/weather/${encodeURIComponent(location)}`);
+                const response = await fetch(`${base_url}/weather/${encodeURIComponent(location)}`);
                 const data = await response.json();
 
                 // Send function output
@@ -146,7 +193,6 @@
                 showError('Error handling weather function: ' + error.message);
             }
         }
-
         // -------------------------------------------------------------------------------------------------------------//
         // Object Detection : Gemini Object Detection Function
         async function handleObjectDetection(output) {
@@ -154,7 +200,7 @@
                 const args = JSON.parse(output.arguments);
                 
                 // TODO: Why are we using localhost , need to update to IP address
-                const response = await fetch('http://localhost:8888/detect');
+                const response = await fetch(`${base_url}/detect`);
                 const data = await response.json();
 
                 sendFunctionOutput(output.call_id, {
@@ -166,7 +212,6 @@
                 showError('Error handling object detection: ' + error.message);
             }
         }
-
         // -------------------------------------------------------------------------------------------------------------//
         // Teaching Mode : Start/Stop Teaching Mode Dummy
         async function handleTeachingMode(output) {
@@ -174,7 +219,7 @@
                 const args = JSON.parse(output.arguments);
                 const mode = args.mode; // 'start' or 'stop'
 
-                const response = await fetch('http://localhost:8888/teaching-mode', {
+                const response = await fetch(`${base_url}/teaching-mode`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -193,7 +238,6 @@
                 showError('Error handling teaching mode: ' + error.message);
             }
         }
-
         // -------------------------------------------------------------------------------------------------------------//
         // Record Video : Recoed Video Function
         async function handelRecordVideo(output) {
@@ -201,7 +245,7 @@
                 const args = JSON.parse(output.arguments);
                 const { objects, action, num_samples } = args;
 
-                const response = await fetch(`http://localhost:8888/record_video?num_recordings=${num_samples}&action_name=${action}&objects=${JSON.stringify(objects)}`, {
+                const response = await fetch(`${base_url}/record_video?num_recordings=${num_samples}&action_name=${action}&objects=${JSON.stringify(objects)}`, {
                     method: 'GET'
                 });
                 const data = await response.json();
@@ -217,7 +261,151 @@
                 showError('Error handling recording videos: ' + error.message);
             }
         }
-        
+        // -------------------------------------------------------------------------------------------------------------//
+        // Check Knowledge : Check Knowledge Function
+        async function handleCheckKnowledge(output) {
+            try {
+                const response = await fetch(`${base_url}/check_knowledge`);
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                    actions: data.actions,
+                    grasps: data.grasps
+                });
+
+                sendResponseCreate();
+            } catch (error) {
+                showError('Error handling check knowledge function: ' + error.message);
+            }
+        }
+        // -------------------------------------------------------------------------------------------------------------//
+        // Specific Knowledge Check :  Specific Knowledge Check Function
+        async function handleSpecificKnowledgeCheck(output) {
+            try {
+                const args = JSON.parse(output.arguments);
+                const name = args.name;
+
+                const response = await fetch(`${base_url}/check_specific_knowledge?name=${encodeURIComponent(name)}`);
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                    name: data.name,
+                    grasp: data.grasp,
+                    action: data.action
+                });
+
+                sendResponseCreate();
+            } catch (error) {
+                showError('Error handling specific knowledge check: ' + error.message);
+            }
+        }
+    
+        // -------------------------------------------------------------------------------------------------------------//
+        // Onboard Action : Onboard Action Function
+        async function handleOnboardInformtation(output) {
+            try {
+            const args = JSON.parse(output.arguments);
+            const { action_name, description, objects, confirm } = args;
+
+            // Store the values in const variables
+            const current_action_name = action_name;
+            const current_description = description;
+            const current_objects = objects;
+
+            const onboardResponse = await fetch(`${base_url}/onboarding_information`, {
+            method: 'POST',
+            headers: {
+            'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+            action_name,
+            description,
+            objects,
+            confirm
+            })
+            });
+            const responseData = await onboardResponse.json();
+
+            if (!confirm) {
+            // First call - show confirmation message
+            sendFunctionOutput(output.call_id, {
+            status: "awaiting_confirmation",
+            details: responseData.details,
+            message: `Please confirm the following information:\nAction: ${action_name}\nDescription: ${description}\nObjects: ${objects.join(", ")}\n\nSay 'yes' to confirm or 'no' to start over.`
+            });
+            } else {
+            // Confirmation call - return result and enable onboarding mode
+            if (responseData.status === "success") {
+            onboardingMode = true;
+            currentTaskId = responseData.task_id;
+            updateStatus(`Onboarding Mode Active - Task ID: ${currentTaskId}`);
+            handleOnboardingMode();
+            }
+            
+            sendFunctionOutput(output.call_id, {
+            status: responseData.status,
+            message: responseData.message,
+            task_id: responseData.task_id,
+            onboarding_mode: onboardingMode
+            });
+            }
+
+            sendResponseCreate();
+            } catch (error) {
+            showError('Error handling action onboarding: ' + error.message);
+            onboardingMode = false;
+            currentTaskId = null;
+            }
+        }
+        // -------------------------------------------------------------------------------------------------------------//
+        // Function : To Enable Onboarding Mode
+        function updateStatus(message) {
+            const statusDiv = document.getElementById('status');
+            if (onboardingMode) {
+                statusDiv.classList.add('onboarding-active');
+            } else {
+                statusDiv.classList.remove('onboarding-active');
+            }
+            statusDiv.textContent = message;
+        }
+
+        // -------------------------------------------------------------------------------------------------------------//
+        // Function : Onboarding Mode
+        async function handleOnboardingMode() {
+            if (!onboardingMode) {
+            console.log("Not in onboarding mode.");
+            return;
+            }
+
+            if (!currentTaskId) {
+            console.warn("No task ID available during onboarding.");
+            return;
+            }
+
+            try {
+            const onboardingInfoResponse = await fetch(`${base_url}/onboarding_information?task_id=${currentTaskId}`);
+            const onboardingInfo = await onboardingInfoResponse.json();
+
+            if (!onboardingInfo || !onboardingInfo.action_name || !onboardingInfo.objects) {
+                console.error("Missing onboarding information.");
+                return;
+            }
+
+            const recordVideoArgs = {
+                arguments: JSON.stringify({
+                    objects: onboardingInfo.objects,
+                    action: onboardingInfo.action_name,
+                    num_samples: 1
+                })
+            };
+
+            await handelRecordVideo({ arguments: JSON.stringify(recordVideoArgs) });
+
+            } catch (error) {
+            showError('Error during onboarding mode: ' + error.message);
+            }
+        }
+
         // -------------------------------------------------------------------------------------------------------------//
         function handleMessage(event) {
             try {
@@ -339,7 +527,61 @@
                                 },
                                 "required": ["num_samples", "action", "objects"]
                             }
+                        },
+                        // Function: Check Knowledge
+                        {
+                            "type": "function",
+                            "name": "check_knowledge",
+                            "description": "Checks its knowledge and tells the user what all it knows to grasp and what actions it can perform.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            }
+                        },
+                        // Function : Specific Knowledge Check
+                        {
+                            "type": "function",
+                            "name": "specific_knowledge_check",
+                            "description": "Checks specific knowledge about a named grasp or action.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "Name of the object or action to check knowledge about" }
+                                },
+                                "required": ["name"]
+                            }
+                        },
+                        // Function : Onboard Action
+                        {
+                            "type": "function",
+                            "name": "onboard_action",
+                            "description": "Handles the onboarding process for new actions. First collects action details, then asks for confirmation, and finally creates a task if confirmed.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "action_name": { 
+                                        "type": "string", 
+                                        "description": "Name of the action being onboarded" 
+                                    },
+                                    "description": { 
+                                        "type": "string", 
+                                        "description": "Description of the action" 
+                                    },
+                                    "objects": { 
+                                        "type": "array", 
+                                        "items": { "type": "string" }, 
+                                        "description": "Array of object names involved in the action" 
+                                    },
+                                    "confirm": {
+                                        "type": "boolean",
+                                        "description": "Whether this is a confirmation request (true) or initial submission (false)"
+                                    }
+                                },
+                                "required": ["action_name", "description", "objects", "confirm"]
+                            }
                         }
+                        
                     ],
                     "tool_choice": "auto",
                     "temperature": 0.8,
@@ -383,7 +625,7 @@
             startButton.disabled = true;
             try {
                 updateStatus('Initializing...');
-                const tokenResponse = await fetch("http://localhost:8888/session");
+                const tokenResponse = await fetch(`${base_url}/session`);
                 const data = await tokenResponse.json();
                 const EPHEMERAL_KEY = data.client_secret.value;
 
