@@ -33,6 +33,7 @@
         // -------------------------------------------------------------------------------------------------------------//
         // Frontend Element calls
         const base_url = "http://localhost:8888"
+        const cobot_base_url = "http://192.168.0.129:8005"
         const startButton = document.getElementById('startButton');
         const stopButton = document.getElementById('stopButton');
         const transcriptDiv = document.getElementById('transcript');
@@ -139,6 +140,15 @@
                     case "simulate":
                         handleSimulationMode(output);
                         break;
+                    case "object_centers":
+                        handleObjectCenters(output);
+                        break;
+                    case "execution_mode":
+                        handleExecutionMode(output);
+                        break;
+                    case "run_robot":
+                        handleRunRealRobot(output);
+                        break;
                     default:
                         console.log('Unknown function call:', output.name);
                 }
@@ -217,29 +227,36 @@
             }
         }
         // -------------------------------------------------------------------------------------------------------------//
-        // Teaching Mode : Start/Stop Teaching Mode Dummy
-        async function handleTeachingMode(output) {
+        // ObjectCenters Mode : Gets Object Centers in Real world and sends it to Simulation as well.
+        async function handleObjectCenters(output) {
             try {
+                console.log('Handling object centers with output:', output);
                 const args = JSON.parse(output.arguments);
-                const mode = args.mode; // 'start' or 'stop'
+                const objects = args.objects || [];
+                console.log('Objects to get centers for:', objects);
 
-                const response = await fetch(`${base_url}/teaching-mode`, {
-                    method: 'POST',
+                // Construct URL query parameter by converting objects array to JSON string.
+                const params = new URLSearchParams();
+                params.append("objects", JSON.stringify(objects));
+
+                const response = await fetch(`${base_url}/object_centers?${params.toString()}`, {
+                    method: 'GET',
                     headers: {
                         'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ mode: mode })
+                    }
                 });
                 const data = await response.json();
+                console.log('Received object centers data:', data);
 
                 sendFunctionOutput(output.call_id, {
-                    status: data.status,
-                    mode: mode
+                    status: "success",
+                    centers: data.centers
                 });
 
                 sendResponseCreate();
             } catch (error) {
-                showError('Error handling teaching mode: ' + error.message);
+                console.error('Error handling object centers:', error);
+                showError('Error handling object centers: ' + error.message);
             }
         }
         // -------------------------------------------------------------------------------------------------------------//
@@ -379,46 +396,247 @@
         // simulation Mode : Handle simulation Mode Function
         async function handleSimulationMode(output) {
             try {
-                const args = JSON.parse(output.arguments);
-                const { confirm } = args;
+            const args = JSON.parse(output.arguments);
+            const { confirm } = args;
+            
+            if (!confirm) {
+                sendFunctionOutput(output.call_id, {
+                status: "awaiting_confirmation",
+                message: "Would you like to enter simulation mode to see what I can see? Say 'yes' to confirm or 'no' to cancel."
+                });
+            } else {
+                simulationMode = true;
                 
-                if (!confirm) {
-                    sendFunctionOutput(output.call_id, {
-                        status: "awaiting_confirmation",
-                        message: "Would you like to enter simulation mode to see what I can see? Say 'yes' to confirm or 'no' to cancel."
-                    });
-                } else {
-                    simulationMode = true;
-                    
-                    // TODO : Update simulation URL
-                    // const simulationUrl = `${base_url}/simulation_feed`;
-                    const simulationUrl = "https://google.com";
-                    const newWindow = window.open(simulationUrl, '_blank');
-                    if (newWindow === null || typeof(newWindow) === 'undefined') {
-                        sendFunctionOutput(output.call_id, {
-                            status: "error",
-                            message: "Popup was blocked by the browser. Please allow popups for this site.",
-                            simulation_mode: SimulationMode
-                        });
-                        return;
-                    }
-                    
-                    sendFunctionOutput(output.call_id, {
-                        status: "success",
-                        message: "simulation mode activated. Opening video feed in new tab.",
-                        simulation_mode: SimulationMode
-                    });
-                    
-                    updateStatus("simulation Mode Active");
+                // TODO : Update simulation URL and open the Iframe isnstead of new tab
+                // const simulationUrl = `${base_url}/simulation_feed`;
+                const simulationUrl = "https://google.com";
+                const newWindow = window.open(simulationUrl, '_blank');
+                if (newWindow === null || typeof(newWindow) === 'undefined') {
+                sendFunctionOutput(output.call_id, {
+                    status: "error",
+                    message: "Popup was blocked by the browser. Please allow popups for this site.",
+                    simulation_mode: simulationMode
+                });
+                return;
                 }
+                
+                sendFunctionOutput(output.call_id, {
+                status: "success",
+                message: "simulation mode activated. Opening video feed in new tab.",
+                simulation_mode: simulationMode
+                });
+                
+                updateStatus("simulation Mode Active");
+
+                // Call loadScenario at the end of handleSimulationMode
+                // await new Promise(resolve => setTimeout(resolve, 5000));
+                // handleLoadScenario(output);
+                
+                // await new Promise(resolve => setTimeout(resolve, 5000));
+                // handleTaskName(output);
+
+                // await new Promise(resolve => setTimeout(resolve, 5000));
+                // handlePlaning(output)
+                
+                // await new Promise(resolve => setTimeout(resolve, 5000));
+                // handleRunRealRobot(output);
+            }
+
+            sendResponseCreate();
+            } catch (error) {
+            showError('Error handling simulation mode: ' + error.message);
+            simulationMode = false;
+            }
+        }
+        // -------------------------------------------------------------------------------------------------------------//
+        // Function : Execution Mode
+        async function handleExecutionMode(output) {
+            try {
+            console.log('Starting execution mode handler');
+            const args = JSON.parse(output.arguments);
+            const { confirm, objects } = args;
+            console.log('Received args:', { confirm, objects });
+
+            if (!confirm) {
+                console.log('Initial execution request - checking knowledge');
+                await handleCheckKnowledge(output);
+                sendFunctionOutput(output.call_id, {
+                status: "awaiting_task",
+                message: "These are the tasks I know. Which one would you like me to perform?"
+                });
+                return;
+            }
+
+            if (!objects || objects.length === 0) {
+                sendFunctionOutput(output.call_id, {
+                status: "awaiting_objects",
+                message: "What objects would you like to perform the action on?"
+                });
+                return;
+            }
+
+            console.log('Execution confirmed - getting object centers');
+            const objectCentersArgs = { objects: objects };
+            try {
+                await handleObjectCenters({...output, arguments: JSON.stringify(objectCentersArgs)});
+            } catch (objectCentersError) {
+                console.error('Error getting object centers:', objectCentersError);
+                sendFunctionOutput(output.call_id, {
+                status: "object_detection_failed",
+                message: "Could not detect the specified objects. Please ensure they are visible."
+                });
+                return;
+            }
+
+            console.log('Object centers retrieved successfully, loading simulation mode');
+            handleSimulationMode(output);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            handleLoadScenario(output);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            console.log('Simulation mode loaded, setting task name');
+            handleTaskName(output);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            console.log('Task name set, planning scenario');
+            handlePlaning(output);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            sendResponseCreate();
+
+            } catch (error) {
+            console.error('Execution mode error:', error);
+            showError('Error handling execution mode: ' + error.message);
+            }
+        }
+        // -------------------------------------------------------------------------------------------------------------//
+        // Cobot Control Function : Load Scenario
+        async function handleLoadScenario(output) {
+            try {
+            const args = JSON.parse(output.arguments);
+            const { confirm } = args;
+
+            if (confirm === undefined) {
+                sendFunctionOutput(output.call_id, {
+                status: "awaiting_confirmation",
+                message: "Would you like to load the scenario? Say 'yes' to confirm or 'no' to cancel."
+                });
+            } else {
+                const response = await fetch(`${cobot_base_url}/load_scenario`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ load_scenario: confirm })
+                });
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                status: data.status,
+                message: data.message
+                });
 
                 sendResponseCreate();
+            }
             } catch (error) {
-                showError('Error handling simulation mode: ' + error.message);
-                SimulationMode = false;
+            showError('Error handling load scenario: ' + error.message);
             }
         }
 
+        // Cobot Control Function : Task
+        async function handleTaskName(output) {
+            try {
+            const task_name = currentActionName || "grasp";
+
+            const response = await fetch(`${cobot_base_url}/task_name`, {
+                method: 'PUT',
+                headers: {
+                'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ task_name })
+            });
+            const data = await response.json();
+
+            sendFunctionOutput(output.call_id, {
+                status: data.status,
+                message: data.message
+            });
+
+            sendResponseCreate();
+            } catch (error) {
+            showError('Error handling task name: ' + error.message);
+            }
+        }
+
+        // Cobot Control Function :  Plan
+        async function handlePlaning(output) {
+            try {
+            const args = JSON.parse(output.arguments);
+            const { confirm } = args;
+
+            if (confirm === undefined) {
+                sendFunctionOutput(output.call_id, {
+                status: "awaiting_confirmation",
+                message: "Would you like to plan the scenario?"
+                });
+            } else {
+                const response = await fetch(`${cobot_base_url}/plan`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ plan: confirm })
+                });
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                status: data.status,
+                message: data.message
+                });
+
+                sendResponseCreate();
+            }
+            } catch (error) {
+            showError('Error handling load scenario: ' + error.message);
+            }
+        }
+
+        // Cobot Control Function :  Execute
+        async function handleRunRealRobot(output){
+            // TODO : Verify cobot is running and at a safe place.
+            try {
+            const args = JSON.parse(output.arguments);
+            const { confirm } = args;
+
+            if (confirm === undefined) {
+                sendFunctionOutput(output.call_id, {
+                status: "awaiting_confirmation",
+                message: "Would you like to execute the scenario?"
+                });
+            } else {
+                const response = await fetch(`${cobot_base_url}/execute`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ execute: confirm })
+                });
+                const data = await response.json();
+
+                sendFunctionOutput(output.call_id, {
+                status: data.status,
+                message: data.message
+                });
+
+                sendResponseCreate();
+            }
+            } catch (error) {
+            showError('Error handling load scenario: ' + error.message);
+            }
+        }
+
+        
         // -------------------------------------------------------------------------------------------------------------//
         function handleMessage(event) {
             try {
@@ -513,17 +731,21 @@
                                 "required": []
                             }
                         },
-                        // Function: Teaching Mode
+                        // Function :  Object Centers
                         {
                             "type": "function",
-                            "name": "teaching_mode",
-                            "description": "Start or stop teaching mode",
+                            "name": "object_centers",
+                            "description": "Retrieves the real-world coordinates (as [x, y, z] triplets) of the center points of specified objects using the object detection API, and sends these coordinates along with simulation trajectory data to the simulation environment.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
-                                    "mode": { "type": "string", "enum": ["start", "stop"] }
+                                    "objects": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "Array of object names for which to retrieve center coordinates"
+                                    }
                                 },
-                                "required": ["mode"]
+                                "required": ["objects"]
                             }
                         },
                         // Function: Record Video
@@ -594,7 +816,7 @@
                                 "required": ["action_name", "description", "objects", "confirm"]
                             }
                         },
-                        // Functon : SimulationMode
+                        // Functon : simulationMode
                         {
                             "type": "function",
                             "name": "simulate",
@@ -609,7 +831,55 @@
                                 },
                                 "required": ["confirm"]
                             }
+                        },
+                        // Function : loadScenario
+                        {
+                            "type": "function",
+                            "name": "load_scenario",
+                            "description": "Confirm if user wants to load the scene.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "confirm": { "type": "boolean", "description": "This is a confirmation request to user , to confirm if they want to load the scene in Simulation or not." }
+                                },
+                                "required": ["confirm"]
+                            }
+                        },
+                        // Function : Task Name
+                        {
+                            "type": "function",
+                            "name": "task_name",
+                            "description": "Set a Specific task name.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "task_name": { "type": "string", "description": "Name of the task to set for the cobot" }
+                                },
+                                "required": ["task_name"]
+                            }
+                        },
+                        // Function: ExecutionMode
+                        {
+                            "type": "function",
+                            "name": "execution_mode",
+                            "description": "Enables execution mode where the robot performs the selected task. Shows available actions, detects objects, and requires user confirmation and user to select the objects and task.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "confirm": {
+                                        "type": "boolean",
+                                        "description": "Whether this is a confirmation request (true) or initial request (false)"
+                                    },
+                                    "objects": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "Array of objects to use in the task"
+                                    }
+                                },
+                                "required": ["confirm"]
+                            }
                         }
+
                     ],
                     "tool_choice": "auto",
                     "temperature": 0.8,
